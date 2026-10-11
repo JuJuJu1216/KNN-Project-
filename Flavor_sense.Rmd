@@ -1,0 +1,162 @@
+---
+title: "What is your taste bund?"
+author: "Zhu(JuJu) Zhu & Zhanning Zhao"
+date: "2026-10-7"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(readxl)
+library(tidyverse)
+library(dplyr)
+library(class)
+flavor_sense <- read_csv("FlavorSense.csv")
+```
+
+#### As two food lovers, we wanted to investigate which factors might influence people's flavor preferences. After talking informally with friends and family members, we suspected that age and exercise habits might be related to the tastes people prefer. This led to our research question: can we use K-Nearest Neighbors to predict a person's preferred taste based on their age and exercise habits? 
+
+
+#### Our initial review of the data showed missing values (NAs) in many variables. We could not determine what caused them, and upon evaluation of the dataset they appear to be scattered without any clear pattern, which suggests they are probably missing at random. Because the dataset is large enough that dropping these rows won't meaningfully reduce our sample, so we decided to remove observations with NAs in the outcome and in any predictor used in our models.
+
+```{r}
+
+flavor_sense_clean <- drop_na(flavor_sense, age, exercise_habits, preferred_taste)
+```
+
+#### Let's try to understand each predicting variables first. We will start by looking into the relationship between age and preferred_taste.
+
+```{r}
+flavor_sense_clean |>
+  ggplot() +
+  geom_density(aes(x= age, fill = preferred_taste), alpha = 0.5)
+```
+
+#### From the density plot, we can find a clear shift around age 30. First, spicy is primarily favored by young people, as the peak shows around 22 years old and drop sharply around 30. Second, preference for sweet also skewed towards age population under 30, but stays at a more moderate level after 30. In contrast, people in the sample only start to show preference for salt after around age 27, and dominate from age 30-69. Similarly, it is relevant uncommon for people before 30 to prefer sour, but the preference rise and stay steady after age 30. In general, the graph shows that younger people prefer spicy and then sweet, which middle-age and older population prefer salty and sour.
+
+
+#### Having examined the relationship between age and preferred taste, we turned to exercise level. Unlike age, exercise is a categorical variable with three levels: Light, Moderate, and Heavy. Because KNN classifies observations by measuring the distance between them, every input must be numeric, so we converted exercise to evenly spaced values that keep its natural ordering: Light = 0, Moderate = 0.5, and Heavy = 1. This conversion assumes the gap between Light and Moderate is the same as the gap between Moderate and Heavy, which is a reasonable starting point for analysis in the future. 
+
+```{r}
+flavor_sense_clean <- flavor_sense_clean |>
+  mutate(exercise_num = case_when(
+    exercise_habits == "Light" ~ 0,
+    exercise_habits == "Moderate" ~ 0.5,
+    exercise_habits == "Heavy" ~ 1
+  ))
+
+flavor_sense_clean |>
+  ggplot() +
+  geom_histogram(aes( x = exercise_num, fill = preferred_taste), alpha = 0.7, binwidth = 0.1)
+```
+
+
+#### From the histogram, we can see that the three exercise groups are similar in size, with around 2,700 to 2,800 people each, so their counts can be compared directly. First, people with light exercise habits strongly prefer sweet, which makes up approximately two-thirds of that group. In contrast, slightly less than one-third of people with moderate or heavy exercise habits prefer sweet. Salty shows the opposite pattern: it is preferred by about a quarter of the moderate and heavy groups but by almost no one in the light group. Sour appears in all three groups, but its share is noticeably higher in the moderate and heavy groups, where it is the most common preference. Last but not least, spicy is the least common preference in every group. It makes up only a small share of the light group and nearly disappears in the moderate and heavy groups.
+
+
+```{r}
+flavor_sense_clean <- flavor_sense_clean |>
+  mutate(
+    age_scaled = as.numeric(scale(age)),
+                            exercise_scaled = as.numeric(scale(exercise_num)))
+```
+
+#### We standardized both Exercise Habit and Age variables to mean 0 and standard deviation 1 so that both variables contribute comparably to the distance calculation KNN uses to make predictions.
+
+```{R}
+flavor_sense_all <- expand.grid(
+  age_scaled = sort(unique(flavor_sense_clean$age_scaled)),
+  exercise_scaled = sort(unique(flavor_sense_clean$exercise_scaled)
+))
+```
+
+#### To choose the best k, we need to test the model agaisnt data that the model has never seen. Therefore, we randomly split the data into two groups. This would generally work assuming that each participant is independent of each other. Since we dont know the source, we just assumed it. If we tested the model on the same data it was trained on, it would look more accurate than it really is because it has already seen the answers before.
+
+```{r}
+set.seed(1)
+n <- nrow(flavor_sense_clean)
+train_rows <- sample(n, size=round(0.5*n))
+train_data <- flavor_sense_clean[train_rows,]
+test_data <- flavor_sense_clean[-train_rows,]
+```
+
+#### To begin the process, we first tested out a bunch of k values randomly and played around to see what the loss function(error rate) is.
+
+```{r}
+my_knn_preds <- knn(
+  train = train_data |> select(age_scaled, exercise_scaled),
+  test = test_data |> select(age_scaled, exercise_scaled),
+  cl = train_data$preferred_taste,
+  k = 200
+)
+
+mean(my_knn_preds != test_data$preferred_taste)
+```
+
+#### Since we can't really test every single k value, we decided to run a for loop that tests a variety of k values along with their error rate using the same code we had before. We were able to find that a k-value of 126 will give us the the lowest error rate of 0.446, which means that it is not a really good.
+
+```{r}
+k_values <-seq(from = 1, to = 500, by = 25)
+error_rates <- NULL
+
+for(value in k_values) {
+ my_knn_preds <- knn(
+  train = train_data |> select(age_scaled, exercise_scaled),
+  test = test_data |> select(age_scaled, exercise_scaled),
+  cl = train_data$preferred_taste,
+  k = value,
+  error_rates <- c(error_rates, mean(my_knn_preds !=test_data$preferred_taste))
+)
+}
+k_results <- data.frame(k_values, error_rates)
+
+k_results |>
+  arrange(error_rates) |>
+  head()
+```
+
+```{r}
+my_knn_preds_chosen <- knn(
+  train = flavor_sense_clean |> select(age_scaled, exercise_scaled),
+  test = flavor_sense_all,
+  cl = flavor_sense_clean$preferred_taste,
+  k = 126
+)
+
+flavor_sense_all |>
+  mutate(my_knn_preds_chosen) |>
+  ggplot() +
+  geom_tile(aes(x=age_scaled, y = exercise_scaled, fill = factor(my_knn_preds_chosen))) + scale_x_continuous(
+    breaks = (c(18, 30, 40, 50, 60, 69) - mean(flavor_sense_clean$age)) / sd(flavor_sense_clean$age),
+    labels = c(18, 30, 40, 50, 60, 69)) +
+  scale_y_continuous(
+    breaks = sort(unique(flavor_sense_all$exercise_scaled)),
+    labels = c("Light", "Moderate", "Heavy")) +
+  labs(x = "Age", y = "Exercise Habit", fill = "Predicted taste")
+
+```
+
+#### This tile plot visualizes what our KNN model (k = 126) predicts for every combination of age and exercise habit. First, the model predicts that everyone with light exercise habits prefers sweet, regardless of age. Within the moderate and heavy exercise groups, people aged about 30 and under are also predicted to prefer sweet. This matches the trend for sweet in the density plot we analyzed earlier. For people over 30 who exercise moderately or heavily, the model predicts sour for the large majority, except at a few ages between 45 and 50, where it predicts salty.
+
+#### Interestingly, our KNN model does not predict Spicy for anyone. To investigate this furthur, we made a jitter plot of each person's age and exercise level, colored by preferred taste. The plot shows that Spicy is very rare overall where there are very few blue points compared with the other tastes. In addition to that, although Spicy is more common among younger people with light exercise habits, respondents who prefer Sweet dominate that region. As a result, any point that falls in that region has more Sweet neighbors than Spicy ones which means that KNN would predicts Sweet instead.
+
+```{r}
+## very interesting we didnt see spicy 
+##trynna figure out why 
+flavor_sense_clean |>
+  mutate(exercise_habits = factor(exercise_habits,
+                                  levels = c("Heavy","Moderate","Light"))) |>
+  ggplot() +
+  geom_jitter(aes(x = age, y = exercise_habits, color = preferred_taste),
+              width =  .1,
+              height = .3)
+
+```
+
+#### In conclusion, our exploration showed that both age and exercise level are related to preferred taste. Younger respondents and light exercisers tend to prefer Sweet and Spicy, while older respondents and those with moderate or heavy exercise habits tend to prefer Salty and Sour, with a noticeable shift around age 30. Using these two predictors, our KNN model with k = 126 had a error rate of 44.6%, which is pretty high. The model also never predicts Spicy. Because Spicy is rare and is outnumbered by Sweet even in the region where it is most common, KNN’s majority vote always favors other tastes, so the model cannot identify people who preferred at all. For our next step, we plan to explore other models and consider adding more predictors, which may help distinguish Spicy from the other tastes.
+
+## Thank you for reading!
+## GOOD LUCK ON YOUR MAPLE RUN!
